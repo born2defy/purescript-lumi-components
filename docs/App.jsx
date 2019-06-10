@@ -46,6 +46,7 @@ const fromComponentPath = title => ({
 });
 
 const componentLoaders = [
+  "Highcharts",
   "Border",
   "Breadcrumb",
   "Button",
