@@ -1,4 +1,9 @@
-module Lumi.Components.Styles where
+module Lumi.Components.Styles
+  ( attachGlobalComponentStyles
+  , globals
+  , module Styles.Border
+  , module Styles.Layout
+  ) where
 
 import Prelude
 
@@ -40,6 +45,8 @@ import Lumi.Components.Row as Row
 import Lumi.Components.Select as Select
 import Lumi.Components.Slider as Slider
 import Lumi.Components.StatusSlat as StatusSlat
+import Lumi.Components.Styles.Border (border, borderRound, border_, round) as Styles.Border
+import Lumi.Components.Styles.Layout (center, column, fill, margin, margin_, padding, padding_, row) as Styles.Layout
 import Lumi.Components.Tab as Tab
 import Lumi.Components.Table as Table
 import Lumi.Components.Text as Text
