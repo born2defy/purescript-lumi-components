@@ -33,6 +33,8 @@ import Lumi.Components.LabeledField (RequiredField(..))
 import Lumi.Components.Modal (dialog)
 import Lumi.Components.Row (row)
 import Lumi.Components.Size (Size(..))
+import Lumi.Components.Text as T
+import Lumi.Components.Textarea as Textarea
 import Lumi.Components.Upload (FileId(..))
 import Lumi.Components.Upload as Upload
 import React.Basic.DOM (css)
@@ -193,6 +195,8 @@ type User =
       , password2 :: Validated String
       }
   , admin :: Boolean
+  , checkbox :: Boolean
+  , descriptiveCheckbox :: Boolean
   , height :: Validated String
   , addresses :: Validated (Array Address)
   , pets :: Validated (Array Pet)
@@ -206,6 +210,8 @@ type ValidatedUser =
   , lastName :: NonEmptyString
   , password :: NonEmptyString
   , admin :: Boolean
+  , checkbox :: Boolean
+  , descriptiveCheckbox :: Boolean
   , height :: Maybe Number
   , addresses :: Array ValidatedAddress
   , pets :: Array ValidatedPet
@@ -272,6 +278,14 @@ userForm = ado
     F.indent "Admin?" Neither
     $ F.focus (prop (SProxy :: SProxy "admin"))
     $ F.switch
+  checkbox <-
+    F.indent "Checked?" Neither
+    $ F.focus (prop (SProxy :: SProxy "checkbox"))
+    $ F.checkbox Nothing
+  descriptiveCheckbox <-
+    F.focus (prop (SProxy :: SProxy "descriptiveCheckbox"))
+    $ F.checkbox
+    $ Just $ { title: T.body_ "This is a right aligned description", subtitle: T.subtext_ "with a sublabel" }
 
   F.section "Personal data"
   height <-
@@ -306,6 +320,10 @@ userForm = ado
     F.indent "Notes" Optional
     $ F.focus (prop (SProxy :: SProxy "notes"))
     $ F.textarea
+  notes <-
+    F.indent "Notes (with placeholder)" Optional
+    $ F.focus (prop (SProxy :: SProxy "notes"))
+    $ F.textarea_ $ Textarea.textareaPlaceholderText_ "Placeholder text..."
 
   F.section "Pets"
   pets <-
@@ -418,6 +436,8 @@ userForm = ado
     , lastName
     , password
     , admin
+    , checkbox
+    , descriptiveCheckbox
     , height
     , pets
     , leastFavoriteColors
@@ -523,4 +543,3 @@ addressForm = ado
           { label: un State state
           , value: state
           }
-
