@@ -14,7 +14,9 @@ module Lumi.Components.Form
   , textbox
   , passwordBox
   , textarea
+  , textarea_
   , switch
+  , checkbox
   , radioGroup
   , file
   , genericSelect
@@ -73,7 +75,7 @@ import Effect.Class (liftEffect)
 import Effect.Unsafe (unsafePerformEffect)
 import JSS (JSS, jss)
 import Lumi.Components.Color (colors)
-import Lumi.Components.Column (column)
+import Lumi.Components.Column (column, column_)
 import Lumi.Components.FetchCache as FetchCache
 import Lumi.Components.Form.Defaults (formDefaults) as Defaults
 import Lumi.Components.Form.Internal (Forest, FormBuilder'(..), FormBuilder, SeqFormBuilder, Tree(..), formBuilder, formBuilder_, invalidate, pruneTree, sequential)
@@ -88,8 +90,9 @@ import Lumi.Components.Loader (loader)
 import Lumi.Components.Modal (modalLink, modalTitle)
 import Lumi.Components.NativeSelect as NativeSelect
 import Lumi.Components.Orientation (Orientation(..))
-import Lumi.Components.Row (row)
+import Lumi.Components.Row (row, row_)
 import Lumi.Components.Select as Select
+import Lumi.Components.Spacing (Space(..), hspace)
 import Lumi.Components.Text (body, body_, subsectionHeader, text)
 import Lumi.Components.Textarea as Textarea
 import Lumi.Components.Upload as Upload
@@ -352,6 +355,23 @@ passwordBox
        String
 passwordBox = inputBox Input.password
 
+-- | A configurable textarea box makes a `FormBuilder` for strings
+textarea_
+  :: forall props
+   . Textarea.TextareaProps
+  -> FormBuilder
+       { readonly :: Boolean | props }
+       String
+       String
+textarea_ textareaProps = formBuilder_ \{ readonly } s onChange ->
+  if readonly
+    then Input.alignToInput $ R.text s
+    else Textarea.textarea textareaProps
+           { value = s
+           , onChange = capture targetValue (traverse_ onChange)
+           , style = R.css { width: "100%" }
+           }
+
 -- | A simple text box makes a `FormBuilder` for strings
 textarea
   :: forall props
@@ -382,6 +402,63 @@ switch = formBuilder_ \{ readonly } b onChange ->
            { checked = if b then Input.On else Input.Off
            , onChange = Events.handler (stopPropagation >>> targetChecked) (traverse_ onChange)
            }
+
+-- | A `checkbox` is an editor for booleans which displays checked or not checked.
+-- | can also accept JSX to display text to the right of the checkbox
+checkbox
+  :: Maybe
+     { title :: JSX
+     , subtitle :: JSX
+     }
+  -> forall props
+  . FormBuilder { readonly :: Boolean | props }
+  Boolean
+  Boolean
+checkbox props =
+  formBuilder_ \{ readonly } value onChange ->
+    Input.label
+      { style: R.css
+          { flexDirection: "row"
+          , alignSelf: "stretch"
+          }
+      , for: null
+      , children:
+          [ column_
+              [ row
+                  { style: R.css { alignItems: "center" }
+                  , children:
+                      [ if readonly
+                          then
+                            Input.input Input.checkbox
+                              { style = R.css { marginBottom: "0" }
+                              , checked = if value then Input.On else Input.Off
+                              , disabled = true
+                              , onChange = Events.handler Events.syntheticEvent \_ -> pure unit
+                              }
+                          else
+                            Input.input Input.checkbox
+                              { style = R.css { marginBottom: "0" }
+                              , checked = if value then Input.On else Input.Off
+                              , disabled = false
+                              , onChange = Events.handler (stopPropagation >>> targetChecked) (traverse_ onChange)
+                              }
+                      , case props of
+                          Just p -> fragment
+                            [ hspace S8
+                            , p.title
+                            ]
+                          _ -> mempty
+                      ]
+                  }
+              ,  case props of
+                  Just p -> R.div
+                    { style: R.css { marginLeft: "28px" }
+                    , children: [ p.subtitle ]
+                    }
+                  _ -> mempty
+              ]
+          ]
+      }
 
 -- | A form that edits an optional structure represented by group of radio
 -- | buttons, visually oriented in either horizontal or vertical fashion.
