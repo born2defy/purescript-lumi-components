@@ -14,7 +14,10 @@ module Lumi.Components.Form
   , textbox
   , passwordBox
   , textarea
+  , textarea_
   , switch
+  , checkbox
+  , labeledCheckbox
   , radioGroup
   , file
   , genericSelect
@@ -352,6 +355,23 @@ passwordBox
        String
 passwordBox = inputBox Input.password
 
+-- | A configurable textarea box makes a `FormBuilder` for strings
+textarea_
+  :: forall props
+   . Textarea.TextareaProps
+  -> FormBuilder
+       { readonly :: Boolean | props }
+       String
+       String
+textarea_ textareaProps = formBuilder_ \{ readonly } s onChange ->
+  if readonly
+    then Input.alignToInput $ R.text s
+    else Textarea.textarea textareaProps
+           { value = s
+           , onChange = capture targetValue (traverse_ onChange)
+           , style = R.css { width: "100%" }
+           }
+
 -- | A simple text box makes a `FormBuilder` for strings
 textarea
   :: forall props
@@ -382,6 +402,92 @@ switch = formBuilder_ \{ readonly } b onChange ->
            { checked = if b then Input.On else Input.Off
            , onChange = Events.handler (stopPropagation >>> targetChecked) (traverse_ onChange)
            }
+
+-- | A `checkbox` is an editor for booleans which displays checked or not checked.
+checkbox :: forall props. FormBuilder { readonly :: Boolean | props } Boolean Boolean
+checkbox = labeledCheckbox mempty
+
+-- | A `labeledCheckbox` is an editor that behaves exactly like `checkbox` but
+-- | also accepts a JSX displayed as a label to its right.
+labeledCheckbox
+  :: forall props
+  . JSX
+  -> FormBuilder { readonly :: Boolean | props } Boolean Boolean
+labeledCheckbox label =
+  formBuilder_ \{ readonly } value onChange ->
+    Input.label
+      { style: R.css
+          { flexDirection: "row"
+          , alignSelf: "stretch"
+          , alignItems: "baseline"
+          }
+      , for: null
+      , children:
+          [ Input.input Input.checkbox
+              { style = R.css { marginBottom: "0", alignSelf: "baseline" }
+              , checked = if value then Input.On else Input.Off
+              , disabled = if readonly then true else false
+              , onChange =
+                  if readonly
+                    then Events.handler Events.syntheticEvent \_ -> pure unit
+                    else Events.handler (stopPropagation >>> targetChecked) (traverse_ onChange)
+              }
+          , lumiAlignToInput
+              { style: { flex: "1", marginLeft: "8px" }
+              , children: label
+              }
+          ]
+      }
+  where
+    lumiAlignToInput = element (R.unsafeCreateDOMComponent "lumi-align-to-input")
+-- checkbox
+--   :: Maybe
+--      { title :: JSX
+--      , subtitle :: JSX
+--      }
+--   -> forall props
+--   . FormBuilder { readonly :: Boolean | props }
+--   Boolean
+--   Boolean
+-- checkbox props =
+--   formBuilder_ \{ readonly } value onChange ->
+--     Input.label
+--       { style: R.css
+--           { flexDirection: "row"
+--           , alignSelf: "stretch"
+--           }
+--       , for: null
+--       , children:
+--           [ column_
+--               [ row
+--                   { style: R.css { alignItems: "center" }
+--                   , children:
+--                       [ Input.input Input.checkbox
+--                           { style = R.css { marginBottom: "0" }
+--                           , checked = if value then Input.On else Input.Off
+--                           , disabled = if readonly then true else false
+--                           , onChange =
+--                               if readonly
+--                                 then Events.handler Events.syntheticEvent \_ -> pure unit
+--                                 else Events.handler (stopPropagation >>> targetChecked) (traverse_ onChange)
+--                           }
+--                       , case props of
+--                           Just p -> fragment
+--                             [ hspace S8
+--                             , p.title
+--                             ]
+--                           _ -> mempty
+--                       ]
+--                   }
+--               ,  case props of
+--                   Just p -> R.div
+--                     { style: R.css { marginLeft: "28px" }
+--                     , children: [ p.subtitle ]
+--                     }
+--                   _ -> mempty
+--               ]
+--           ]
+--       }
 
 -- | A form that edits an optional structure represented by group of radio
 -- | buttons, visually oriented in either horizontal or vertical fashion.

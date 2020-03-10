@@ -10,6 +10,7 @@ module Lumi.Components.Input
   , InputProps(..)
   , input
   , text_
+  , inputPlaceholderText_
   , username
   , email
   , password
@@ -172,6 +173,10 @@ text_ =
   , value: ""
   , variant: None
   }
+
+inputPlaceholderText_ :: String -> InputProps
+inputPlaceholderText_ s =
+  text_ { placeholder = s }
 
 username :: InputProps
 username = text_
@@ -372,14 +377,20 @@ styles = jss
                       , lineHeight: "1"
                       }
                   }
+              , "&::before":
+                  { content: "'•'"
+                  , visibility: "hidden"
+                  }
               , "&:checked":
                   { "&::before":
                       { content: "'✓'"
+                      , visibility: "visible"
                       }
                   }
               , "&:indeterminate":
                   { "&::before":
                       { content: "'⎻'"
+                      , visibility: "visible"
                       }
                   }
               , "&:disabled":
