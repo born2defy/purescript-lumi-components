@@ -4,7 +4,7 @@ import Prelude
 import Effect (Effect)
 import Effect.Uncurried (EffectFn1, runEffectFn1)
 import Effect.Unsafe (unsafePerformEffect)
-import React.Basic.Hooks (Hook, JSX, ReactComponent, component, element, unsafeHook)
+import React.Basic.Hooks (Hook, JSX, ReactComponent, reactComponent, element, unsafeHook)
 import React.Basic.Hooks as React
 
 foreign import data MediaQuery :: Type
@@ -87,6 +87,6 @@ mkMediaComponent ::
   Hook UseMediaQuery Boolean ->
   Effect (ReactComponent { render :: Boolean -> JSX })
 mkMediaComponent name umq = do
-  component ("MediaQuery(" <> name <> ")") \{ render } -> React.do
+  reactComponent ("MediaQuery(" <> name <> ")") \{ render } -> React.do
     isMatch <- umq
     pure $ render isMatch

@@ -294,7 +294,7 @@ formState
           -> JSX
       }
 formState = unsafePerformEffect do
-  Hooks.component "FormState" \props -> Hooks.do
+  Hooks.reactComponent "FormState" \props -> Hooks.do
     state <- useForm props.form
       { initialState: props.initialState
       , inlineTable: props.inlineTable
