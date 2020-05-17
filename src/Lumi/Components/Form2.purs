@@ -56,7 +56,7 @@ module Lumi.Components.Form2
 import Prelude
 
 import Color (cssStringHSLA)
-import Data.Array ((:))
+import Data.Array (elem, (:))
 import Data.Array as Array
 import Data.Either (Either(..))
 import Data.Foldable (fold, surround)
@@ -82,8 +82,8 @@ import Lumi.Components.Form.Defaults (formDefaults) as Defaults
 import Lumi.Components.Form.Internal (Forest, FormBuilder'(..), FormBuilder, SeqFormBuilder, Tree(..), formBuilder, formBuilder_, invalidate, pruneTree, sequential)
 import Lumi.Components.Form.Internal (Forest, FormBuilder', FormBuilder, SeqFormBuilder', SeqFormBuilder, formBuilder, formBuilder_, invalidate, listen, parallel, revalidate, sequential) as Internal
 import Lumi.Components.Form.Validation (setModified)
+import Lumi.Components.Form.Validation2 (FieldState(..), FormField, InputEvent(..), fieldState, formValue, updateFormField)
 import Lumi.Components.Form.Validation2 (Validated(..), Validator, _Validated, fromValidated, mustBe, mustEqual, nonEmpty, nonEmptyArray, nonNull, validNumber, validInt, validDate, optional, setFresh, setModified, validated, warn) as Validation
-import Lumi.Components.Form.Validation2 (FormField, formValue, updateFormField, InputEvent(..))
 import Lumi.Components.Input (alignToInput)
 import Lumi.Components.Input as Input
 import Lumi.Components.LabeledField (RequiredField(..), labeledField, labeledFieldValidationErrorStyles, labeledFieldValidationWarningStyles)
@@ -343,10 +343,16 @@ inputBox
   :: forall props
    . Input.InputProps
   -> FormBuilder
-       { readonly :: Boolean, waitToWarn :: Boolean | props }
+       { readonly :: Boolean
+       , waitToWarn :: Boolean
+      -- ^ Rather than show errors on first edit, we wait until the user has entered their first value before showing errors
+       , valuesOnBlur :: Boolean
+      -- ^ this means that new values are only produced on Blur Events  
+       | props 
+       }
        (FormField String)
        String
-inputBox inputProps = formBuilder \{ readonly } ff ->
+inputBox inputProps = formBuilder \{ readonly, valuesOnBlur } ff ->
   let edit onChange = if readonly
         then Input.alignToInput $ body_ (formValue ff)
         else Input.input inputProps
@@ -355,13 +361,19 @@ inputBox inputProps = formBuilder \{ readonly } ff ->
               , onBlur = notNull $ capture targetValue $ traverse_ (onChange <<< updateFormField <<< BlurEvent)
               , style = R.css { width: "100%" }
               }
-  in { edit,  validate: Just (formValue ff)}
+  in { edit
+     , validate: 
+        if valuesOnBlur && (fieldState ff `elem` [BeingModifiedFirstTime,BeingModifiedAgain]) 
+      -- ^ Here we restrict the production of new values until blurs
+          then Nothing
+          else Just (formValue ff)
+    }
 
 -- | A simple text box makes a `FormBuilder` for strings
 textbox
   :: forall props
    . FormBuilder
-      { readonly :: Boolean, waitToWarn :: Boolean | props }
+      { readonly :: Boolean, waitToWarn :: Boolean, valuesOnBlur :: Boolean | props }
        (FormField String)
        String
 textbox = inputBox Input.text_
@@ -370,7 +382,7 @@ textbox = inputBox Input.text_
 passwordBox
   :: forall props
    . FormBuilder
-      { readonly :: Boolean, waitToWarn :: Boolean | props }
+      { readonly :: Boolean, waitToWarn :: Boolean, valuesOnBlur :: Boolean | props }
        (FormField String)
        String
 passwordBox = inputBox Input.password
