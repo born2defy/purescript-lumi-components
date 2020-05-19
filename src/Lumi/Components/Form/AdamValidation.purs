@@ -10,7 +10,7 @@ import Data.Date as Date
 import Data.Either (Either(..), either, hush, note)
 import Data.Enum (toEnum)
 import Data.Eq (class Eq1)
-import Data.Foldable (foldMap, traverse_)
+import Data.Foldable (foldMap, for_, traverse_)
 import Data.Int as Int
 import Data.Maybe (Maybe(..), isNothing)
 import Data.Monoid (guard)
@@ -32,7 +32,8 @@ import Lumi.Components.LabeledField (ValidationMessage(..))
 import Lumi.Components.Text (body_, subtext, text)
 import Prim.RowList as RL
 import React.Basic.DOM as R
-import React.Basic.DOM.Events (capture, targetValue)
+import React.Basic.DOM.Events (capture, key, targetValue)
+import React.Basic.Events (handler_, merge)
 
 -- | A `Validator` takes a possibly invalid form `result` and produces
 -- | a `valid` result, or an error message.
@@ -299,11 +300,13 @@ inputBox
       -- ^ Rather than show errors on first edit, we wait until the user has entered their first value before showing errors
        , newValueOnlyOnFocusChange:: Boolean
       -- ^ this means that new values are only produced on Blur Events  
+       , blurEventOnKey:: Maybe String
+      -- ^ this means that new values are only produced on Blur Events  
        | props 
        }
        (FormField String)
        String
-inputBox inputProps restrictInput = formBuilder \{ readonly, newValueOnlyOnFocusChange } ff ->
+inputBox inputProps restrictInput = formBuilder \{ readonly, newValueOnlyOnFocusChange, blurEventOnKey } ff ->
   let edit onChange = if readonly
         then Input.alignToInput $ body_ (formValue ff)
         else Input.input inputProps
@@ -311,6 +314,10 @@ inputBox inputProps restrictInput = formBuilder \{ readonly, newValueOnlyOnFocus
               , onChange = capture targetValue $ traverse_ $ restrictInputOnChange restrictInput (onChange <<< updateFormField <<< ChangeEvent)
               , onBlur = notNull $ capture targetValue $ traverse_ (onChange <<< updateFormField <<< BlurEvent)
               , style = R.css { width: "100%" }
+              , onKeyUp = notNull $ case blurEventOnKey of 
+                  Just keycode -> capture (merge {key, targetValue}) \{key, targetValue} -> 
+                        for_ key \code -> if code == keycode then for_ targetValue (onChange <<< updateFormField <<< BlurEvent) else mempty
+                  Nothing -> handler_  mempty
               }
   in { edit
      , validate: 
@@ -329,6 +336,7 @@ textbox
       { readonly :: Boolean
       , waitToShowErrors :: Boolean
       , newValueOnlyOnFocusChange :: Boolean
+      , blurEventOnKey:: Maybe String
       | props 
       } (FormField String) String
 textbox = inputBox Input.text_
@@ -341,6 +349,7 @@ passwordBox
       { readonly :: Boolean
       , waitToShowErrors :: Boolean
       , newValueOnlyOnFocusChange :: Boolean
+      , blurEventOnKey:: Maybe String
       | props 
       } (FormField String) String
 passwordBox = inputBox Input.password
