@@ -23,6 +23,7 @@ import Data.String.NonEmpty (NonEmptyString)
 import Data.String.NonEmpty (fromString) as NES
 import Data.String.Pattern (Pattern(..))
 import Data.Traversable (traverse)
+import Effect (Effect)
 import Heterogeneous.Mapping (class MapRecordWithIndex, class Mapping, ConstMapping, hmap, mapping)
 import Lumi.Components.Column (column)
 import Lumi.Components.Form.Internal (Forest, FormBuilder, FormBuilder'(..), Tree(..), formBuilder)
@@ -281,10 +282,17 @@ validated runValidator editor = FormBuilder \props@{ readonly, waitToShowErrors 
       , validate: hush =<< res
       }
 
+-- | Restricts input entry to only those which pass a validation function.  Other entries are ignored.
+restrictInputOnChange :: ∀ a. Maybe (Validator a a) -> (a -> Effect Unit) -> (a -> Effect Unit)
+restrictInputOnChange validateInput f = case validateInput of 
+  Just validate -> either mempty f <<< validate
+  Nothing       -> f 
+
 -- | A configurable input box makes a `FormBuilder` for strings
 inputBox
   :: forall props
    . Input.InputProps
+  -> Maybe (Validator String String)
   -> FormBuilder
        { readonly :: Boolean
        , waitToShowErrors :: Boolean
@@ -295,12 +303,12 @@ inputBox
        }
        (FormField String)
        String
-inputBox inputProps = formBuilder \{ readonly, newValueOnlyOnFocusChange } ff ->
+inputBox inputProps restrictInput = formBuilder \{ readonly, newValueOnlyOnFocusChange } ff ->
   let edit onChange = if readonly
         then Input.alignToInput $ body_ (formValue ff)
         else Input.input inputProps
               { value = formValue ff
-              , onChange = capture targetValue $ traverse_ (onChange <<< updateFormField <<< ChangeEvent)
+              , onChange = capture targetValue $ traverse_ $ restrictInputOnChange restrictInput (onChange <<< updateFormField <<< ChangeEvent)
               , onBlur = notNull $ capture targetValue $ traverse_ (onChange <<< updateFormField <<< BlurEvent)
               , style = R.css { width: "100%" }
               }
@@ -316,19 +324,25 @@ inputBox inputProps = formBuilder \{ readonly, newValueOnlyOnFocusChange } ff ->
 -- | A simple text box makes a `FormBuilder` for strings
 textbox
   :: forall props
-   . FormBuilder
-      { readonly :: Boolean, waitToShowErrors :: Boolean, newValueOnlyOnFocusChange :: Boolean | props }
-       (FormField String)
-       String
+   . Maybe (Validator String String) 
+   ->  FormBuilder
+      { readonly :: Boolean
+      , waitToShowErrors :: Boolean
+      , newValueOnlyOnFocusChange :: Boolean
+      | props 
+      } (FormField String) String
 textbox = inputBox Input.text_
 
 -- | A simple password box makes a `FormBuilder` for strings
 passwordBox
   :: forall props
-   . FormBuilder
-      { readonly :: Boolean, waitToShowErrors :: Boolean, newValueOnlyOnFocusChange :: Boolean | props }
-       (FormField String)
-       String
+   . Maybe (Validator String String) 
+   ->  FormBuilder
+      { readonly :: Boolean
+      , waitToShowErrors :: Boolean
+      , newValueOnlyOnFocusChange :: Boolean
+      | props 
+      } (FormField String) String
 passwordBox = inputBox Input.password
 
 
