@@ -2,17 +2,17 @@ module Lumi.Components.Form.AdamValidation where
 
 import Prelude
 
-import Data.Array (elem)
+import Data.Array (fold)
 import Data.Array as Array
 import Data.Array.NonEmpty (NonEmptyArray)
 import Data.Array.NonEmpty (fromArray) as NEA
 import Data.Date as Date
-import Data.Either (Either(..), either, hush, note)
+import Data.Either (Either(..), either, note)
 import Data.Enum (toEnum)
 import Data.Eq (class Eq1)
 import Data.Foldable (foldMap, for_, traverse_)
 import Data.Int as Int
-import Data.Maybe (Maybe(..), isNothing)
+import Data.Maybe (Maybe(..))
 import Data.Monoid (guard)
 import Data.Newtype (class Newtype, un)
 import Data.Nullable (notNull)
@@ -34,6 +34,7 @@ import Prim.RowList as RL
 import React.Basic.DOM as R
 import React.Basic.DOM.Events (capture, key, targetValue)
 import React.Basic.Events (handler_, merge)
+import Unsafe.Coerce (unsafeCoerce)
 
 -- | A `Validator` takes a possibly invalid form `result` and produces
 -- | a `valid` result, or an error message.
@@ -93,107 +94,114 @@ optional :: forall a. Validator String a -> Validator String (Maybe a)
 optional _ "" = pure Nothing
 optional v s  = map Just (v s)
 
-
-
 -- | FORMFIELDS
-newtype FormField a = FormField {fieldState :: FieldState, value :: a}  
-derive instance ntFormField :: Newtype (FormField a) _
-derive instance eqeqFormField :: Eq a => Eq (FormField a)
-derive instance eq1FormField :: Eq1 FormField
-derive instance ordFormField :: Ord a => Ord (FormField a)
-derive instance ord1FormField :: Ord1 FormField
-derive instance functorFormField :: Functor FormField
+newtype FormField' b a = FormField 
+  { inputValue :: InputValue a
+  , fieldState :: FieldState
+  , validationState :: ValidationState
+  , value :: a
+  , validValue :: Maybe b 
+  }  
+derive instance ntFormField :: Newtype (FormField' b a) _
+derive instance eqeqFormField :: (Eq b, Eq a) => Eq (FormField' b a)
+derive instance eq1FormField :: Eq b => Eq1 (FormField' b) 
+derive instance ordFormField :: (Ord b, Ord a) => Ord (FormField' b a)
+derive instance ord1FormField :: Ord b => Ord1 (FormField' b)
+derive instance functorFormField :: Functor (FormField' b)
+instance showFormField :: (Show a, Show b) => Show (FormField' b a) where
+  show (FormField ff) = fold
+    [ "inputValue: "
+    , show ff.inputValue
+    , "fieldState: "
+    , show ff.fieldState
+    , ", validationState: "
+    , show ff.validationState
+    , ", value: "
+    , show ff.value
+    , ", validValue: "
+    , show ff.validValue
+    ]
 
-instance applyFormField :: Apply FormField where
-  apply (FormField f) (FormField x) = case f.fieldState, x.fieldState of 
-    Initial,                state               -> FormField {fieldState: state, value: applyValue}
-    state,                  Initial             -> FormField {fieldState: state, value: applyValue}
+type FormField a = FormField' a String  
 
-    BeingModifiedFirstTime, state                  -> FormField {fieldState: state, value: applyValue}
-    state,                  BeingModifiedFirstTime -> FormField {fieldState: state, value: applyValue}
+pure_ x = FormField 
+  { inputValue: {inputEvent: Init, value: x}
+  , fieldState: Initial
+  , validationState: Valid
+  , value: x
+  , validValue: Nothing 
+  } 
 
-    BeingModifiedAgain,     state               -> FormField {fieldState: BeingModifiedAgain, value: applyValue}
-    state,                  BeingModifiedAgain  -> FormField {fieldState: BeingModifiedAgain, value: applyValue}
+inputValue :: ∀ a b. FormField' b a -> InputValue a
+inputValue = _.inputValue <<< un FormField 
 
-    BeenModified v,         BeenModified v2     -> FormField {fieldState: BeenModified (v <> v2), value: applyValue}
-    where
-    applyValue = f.value x.value 
-
-instance applicativeFormField :: Applicative FormField where
-  pure x = FormField {fieldState: Initial, value: x } 
-
-fieldState :: ∀ a. FormField a -> FieldState
+fieldState :: ∀ a b. FormField' b a -> FieldState
 fieldState = _.fieldState <<< un FormField 
 
-formValue :: ∀ a. FormField a -> a
+formValue :: ∀ a b. FormField' b a -> a
 formValue = _.value <<< un FormField 
 
-updateFieldState :: ∀ a. FieldState -> FormField a -> FormField a 
+validationState :: ∀ a b. FormField' b a -> ValidationState
+validationState = _.validationState <<< un FormField 
+
+validValue :: ∀ a b. FormField' b a -> Maybe b
+validValue = _.validValue <<< un FormField 
+
+updateFieldState :: ∀ a b. FieldState -> FormField' b a -> FormField' b a 
 updateFieldState fs (FormField ff) = FormField ff {fieldState = fs}
 
+getErrorMessage :: ∀ a b. FormField' b a -> Maybe String
+getErrorMessage ff | Invalid err <- validationState ff = Just err
+getErrorMessage _ = Nothing
+
+
 -- | Update validation status of a formfield which has been modified
-updateValidation :: ∀ a.  ValidationState -> FormField a -> FormField a 
-updateValidation v ff = case fieldState ff of
-  BeenModified _ -> updateFieldState (BeenModified v) ff
-  _              -> ff
-
-data InputEvent a = ChangeEvent a | BlurEvent a 
-derive instance eqeqInputEvent :: Eq a => Eq (InputEvent a)
-derive instance eq1InputEvent :: Eq1 InputEvent
-derive instance ordInputEvent :: Ord a => Ord (InputEvent a)
-derive instance ord1InputEvent :: Ord1 InputEvent
-
-updateFormField :: ∀ a. Eq a => InputEvent a -> FormField a -> FormField a 
-updateFormField x ff = case x, fieldState ff of 
-  ChangeEvent v, Initial -> FormField {fieldState: BeingModifiedFirstTime, value: v}
--- ^ if the user is changing the initial value, then its being modified the first time
-  BlurEvent v, st | st == Initial  && formValue ff == v   
-    -> FormField {fieldState: Initial, value: v}
--- ^ on the first change we make sure the user has done something before we change the state
-  BlurEvent   v, _       -> FormField {fieldState: BeenModified Valid,     value: v}
--- ^ if the user is done, then its been modified and its valid until told otherwise
-  ChangeEvent v, BeenModified _ -> FormField {fieldState: BeingModifiedAgain, value: v}
--- ^ if we are modifiying a previously modified value, then its being modified again
-  ChangeEvent v, prevState    -> FormField {fieldState: prevState, value: v}
--- ^ if we changing a being modified state, then this just means we are not done yet
+updateValidation :: ∀ a b.  ValidationState -> FormField' b a -> FormField' b a 
+updateValidation v (FormField ff) = FormField $ ff { validationState = v }
 
 -- | A FieldState correctly describes the state of a form field
 data FieldState 
-  = Initial
+  = Initial 
  -- ^ The Intital Value supplied at creation
   | BeingModifiedFirstTime
  -- ^ The first time a user tries to modfiy a value (needed for waitToWarn)
   | BeingModifiedAgain
  -- ^ The value is being modified by the user/a new value is in the process of being constructed by the user.  We may have a warning to show based on their input.
-  | BeenModified ValidationState
+  | BeenModified 
  -- ^ The value has been modified by the user/a new value has been constructed by the user.  We may have a Valid or Invalid new value.
 derive instance eqFieldState :: Eq FieldState
 derive instance ordFieldState :: Ord FieldState
+instance showFieldState :: Show FieldState where
+  show = case _ of 
+    Initial -> "Initial"
+    BeingModifiedFirstTime -> "BeingModifiedFirstTime"
+    BeingModifiedAgain -> "BeingModifiedAgain"
+    BeenModified -> "BeenModified"
+
+isInitial :: FieldState -> Boolean
+isInitial Initial = true
+isInitial _ = false 
 
 data ValidationState 
   = Valid
  -- ^ The updated value is Valid
-  | Invalid 
+  | Invalid String
  -- ^ The updated value is Invalid 
   | BeingValidated 
  -- ^ The updated value is in an the process of being validated asynchronously
 derive instance eqValidationState :: Eq ValidationState
 derive instance ordValidationState :: Ord ValidationState
-
-instance sgValidationState :: Semigroup ValidationState where
-  append x y = case x, y of 
-    Valid,          Valid          -> Valid
-    Valid,          Invalid        -> Invalid
-    Invalid,        Valid          -> Invalid
-    Invalid,        Invalid        -> Invalid
-    _,              BeingValidated -> BeingValidated
-    BeingValidated, _              -> BeingValidated
+instance showValidationState :: Show ValidationState where
+  show = case _ of 
+    Valid -> "Valid"
+    Invalid s -> "Invalid: " <> s
+    BeingValidated -> "BeingValidated"
 
 -- | Internal utility type for modifying the validated state of fields in
 -- | records containing `Validated` values.
-newtype ModifyFormField = ModifyFormField (FormField ~> FormField)
+newtype ModifyFormField = ModifyFormField (∀ b. FormField' b ~> FormField' b)
 
-instance modifyFormField :: Mapping ModifyFormField a a => Mapping ModifyFormField (FormField a) (FormField a) where
+instance modifyFormField :: Mapping ModifyFormField a a => Mapping ModifyFormField (FormField' b a) (FormField' b a) where
   mapping m@(ModifyFormField f) = map (mapping m) <<< f
 else instance modifyFormFieldRecord :: (RL.RowToList r xs, MapRecordWithIndex xs (ConstMapping ModifyFormField) r r) => Mapping ModifyFormField {| r} {| r} where
   mapping d = hmap d
@@ -209,7 +217,7 @@ setInitial
    . Mapping ModifyFormField value value
   => value
   -> value
-setInitial = mapping (ModifyFormField (updateFieldState Initial))
+setInitial = mapping (ModifyFormField (updateFieldState $ Initial))
 
 -- | Sets all `Validated` fields in a record to `Modified`, showing all
 -- | validation messages.
@@ -218,37 +226,205 @@ setBeenModified
    . Mapping ModifyFormField value value
   => value
   -> value
-setBeenModified = mapping (ModifyFormField (updateFieldState $ BeenModified Valid))
+setBeenModified = mapping (ModifyFormField (updateFieldState $ BeenModified))
 
-validated
-  :: ∀ props validated a b
-   . Validator a b
-  -> FormBuilder { readonly :: Boolean, waitToShowErrors :: Boolean | props } (FormField validated) a
-  -> FormBuilder { readonly :: Boolean, waitToShowErrors :: Boolean | props } (FormField validated) b
-validated runValidator editor = FormBuilder \props@{ readonly, waitToShowErrors } ff ->
-  let
+-- | Restricts input entry to only those which pass a validation function.  Other entries are ignored.
+restrictInputOnChange :: ∀ a. Maybe (Validator a a) -> (a -> Effect Unit) -> (a -> Effect Unit)
+restrictInputOnChange validateInput f = case validateInput of 
+  Just validate -> either mempty f <<< validate
+  Nothing       -> f 
+
+data InputEvent = ChangeEvent | BlurEvent | Init
+derive instance eqeqInputEvent :: Eq InputEvent
+derive instance ordInputEvent :: Ord InputEvent
+instance showInputEvent :: Show InputEvent where
+  show = case _ of 
+    ChangeEvent -> "ChangeEvent"
+    BlurEvent -> "BlurEvent"
+    Init      -> "Init"
+
+type InputValue a = {inputEvent :: InputEvent, value :: a}
+
+type UpdateProps
+  = { newValueOnlyOnFocusChange :: Boolean
+    }
+
+deafultUpdateProps :: UpdateProps
+deafultUpdateProps = {newValueOnlyOnFocusChange: true}
+
+toFormField :: ∀ a b. InputValue a -> FormField' b a -> FormField' b a
+toFormField input (FormField ff) = FormField ff {inputValue = input}
+
+updateFormField :: ∀ a b. Eq a =>  UpdateProps -> Validator a b -> FormField' b a -> FormField' b a
+updateFormField {newValueOnlyOnFocusChange} validate ff@(FormField input) = case input.inputValue.inputEvent, fieldState ff of 
+  -- if the user is changing the initial value, then its being modified the first time
+  ChangeEvent, Initial  
+   -> case validate input.inputValue.value of
+        Left err -> 
+          FormField 
+            { inputValue: input.inputValue
+            , fieldState: BeingModifiedFirstTime
+            , validationState: Invalid err
+            , value: input.inputValue.value
+            -- newValueOnlyOnFocusChange means there is no value when the user is modifiying the input
+            , validValue: Nothing
+            }
+        Right valid -> 
+          FormField 
+            { inputValue: input.inputValue
+            , fieldState: BeingModifiedFirstTime
+            , validationState: Valid
+            , value: input.inputValue.value
+            -- newValueOnlyOnFocusChange means there is no value when the user is modifiying the input
+            , validValue: if newValueOnlyOnFocusChange then Nothing else Just valid 
+            }
+
+  -- on the first change we make sure the user has done something before we change the state
+  BlurEvent, st | isInitial st && formValue ff == input.inputValue.value -> ff
+
+  -- if the user is done, then its been modified and we validate the value if needed
+  BlurEvent, _       
+    -> case validate input.inputValue.value of 
+          Left err -> 
+            FormField 
+              { inputValue: input.inputValue
+              , fieldState: BeenModified 
+              , validationState: Invalid err
+              , value: input.inputValue.value
+              , validValue: Nothing
+              }
+          Right valid -> 
+            FormField 
+              { inputValue: input.inputValue
+              , fieldState: BeenModified
+              , validationState: Valid
+              , value: input.inputValue.value
+              , validValue: Just valid 
+              }
+
+  -- if we are modifiying a previously modified value, then its being modified again
+  ChangeEvent, BeenModified  
+    -> case validate input.inputValue.value of
+          Left err -> 
+            FormField 
+              { inputValue: input.inputValue
+              , fieldState: BeingModifiedAgain
+              , validationState: Invalid err
+              , value: input.inputValue.value
+              -- newValueOnlyOnFocusChange means there is no value when the user is modifiying the input
+              , validValue: Nothing
+              }
+          Right valid -> 
+            FormField 
+              { inputValue: input.inputValue
+              , fieldState: BeingModifiedAgain
+              , validationState: Valid
+              , value: input.inputValue.value
+              -- newValueOnlyOnFocusChange means there is no value when the user is modifiying the input
+              , validValue: if newValueOnlyOnFocusChange then Nothing else Just valid 
+              }
+  -- if we are changing a beingmodified state, then this just means we are not done yet
+ --  This case is actually:  ChangeEvent v, prevState | prevState == BeingModifiedFirstTime || prevState == BeingModifiedAgain
+  ChangeEvent, prevState 
+    -> case validate input.inputValue.value of
+          Left err -> 
+            FormField 
+              { inputValue: input.inputValue
+              , fieldState: prevState
+              , validationState: Invalid err
+              , value: input.inputValue.value
+              -- There is no value when the user is modifiying the input
+              , validValue: Nothing
+              }
+          Right valid -> 
+            FormField 
+              { inputValue: input.inputValue
+              , fieldState: prevState
+              , validationState: Valid
+              , value: input.inputValue.value
+              -- There is no value when the user is modifiying the input
+              , validValue: if newValueOnlyOnFocusChange then Nothing else Just valid 
+              }
+
+    -- Init is never thrown from an input, so this always means
+    -- we are processing the initial value
+  Init, prevState 
+    -> case validate input.inputValue.value of
+        Left err -> 
+          FormField 
+            { inputValue: input.inputValue
+            , fieldState: prevState
+            , validationState: Invalid err
+            , value: input.inputValue.value
+            -- There is no value when the user is modifiying the input
+            , validValue: Nothing
+            }
+        Right valid -> 
+          FormField 
+            { inputValue: input.inputValue
+            , fieldState: prevState
+            , validationState: Valid
+            , value: input.inputValue.value
+            -- There is no value when the user is modifiying the input
+            , validValue: Just valid 
+            } 
+
+validated :: ∀ props a b
+  .  Eq a  
+  => Validator a b
+  -> FormBuilder (InputBoxProps props) (FormField' b a)  a
+  -> FormBuilder (ValidationProps props) (FormField' b a) b
+validated = validatedAs Error
+
+warning :: ∀ props a b
+  .  Eq a  
+  => Validator a b
+  -> FormBuilder (InputBoxProps props) (FormField' b a)  a
+  -> FormBuilder (ValidationProps props) (FormField' b a) b
+warning = validatedAs Warning
+
+validatedAs
+  :: ∀ props a b
+  .  Eq a  
+  => (String -> ValidationMessage)
+  -> Validator a b
+  -> FormBuilder (InputBoxProps props) (FormField' b a)  a
+  -> FormBuilder (ValidationProps props) (FormField' b a) b
+validatedAs toError validateValue editor = FormBuilder \props@{readonly, waitToShowErrors, newValueOnlyOnFocusChange} ff ->
+  let 
+       -- THIS IS WHERE THE MAGIC HAPPENS
+      -- ================================
+      validatedFF = updateFormField {newValueOnlyOnFocusChange} validateValue ff
+
+      contractProps :: ∀ p p'. ValidationProps p -> InputBoxProps p'
+      contractProps = unsafeCoerce
+
       innerColumn_ children =
         column
-          { style: R.css { maxWidth: "100%", maxHeight: "100%" }
+          { style: R.css {maxWidth: "100%", maxHeight: "100%"}
           , children
           }
-
-      { edit, validate } = un FormBuilder editor props ff
+      -- Its ugly, but we can use an arbitrary InputEvent here as the inputbox
+      -- discrads it anyway.  Still less ugly then tracking the value for no reason.
+      {edit, validate} = un FormBuilder editor (contractProps props) ff
 
       modify :: Maybe String -> Forest -> Forest
       modify message forest =
           case Array.unsnoc forest of
-            Nothing -> [Child { key: Nothing, child: errLine }]
-            Just { init, last: Child c } ->
-              Array.snoc init (Child c { child = innerColumn_ [c.child, errLine] })
-            Just { init, last: Wrapper c } ->
-              Array.snoc init (Wrapper c { children = modify message c.children })
-            Just { init, last: Node n } ->
-              Array.snoc init (Node n { validationError = Error <$> message })
+            Nothing -> [Child {key: Nothing, child: errLine}]
+
+            Just {init, last: Child c} ->
+              Array.snoc init (Child c {child = innerColumn_ [c.child, errLine]})
+
+            Just {init, last: Wrapper c} ->
+              Array.snoc init (Wrapper c {children = modify message c.children})
+
+            Just {init, last: Node n} ->
+              Array.snoc init (Node n {validationError = Error <$> message})
         where
         errLine =
           guard (not readonly) message # foldMap \s ->
-            case Error s of
+            case toError s of
               Error e ->
                 text subtext
                   { className = notNull "labeled-field--validation-error"
@@ -262,75 +438,85 @@ validated runValidator editor = FormBuilder \props@{ readonly, waitToShowErrors 
 
       -- The validation can produce either a valid result, an error message, or
       -- none in the case where the form is Fresh.
-      res :: Maybe (Either String b)
-      res = do
-        valid <- validate
-        case fieldState ff of
-          Initial ->
-            hushError valid
-          BeingModifiedFirstTime | waitToShowErrors ->
-            hushError valid
-          BeingModifiedAgain | waitToShowErrors ->
-            hushError valid
-          _ -> 
-            showError valid
+      hushErrorsByFieldState :: Maybe String -> Maybe String 
+      hushErrorsByFieldState merr = case fieldState validatedFF of
+      -- We don't show errors on initial values by default
+        Initial ->
+          Nothing
+        -- We don't show errors on values that are being modified if the flag is set
+        BeingModifiedFirstTime | waitToShowErrors ->
+          Nothing
+        -- We don't show errors on values that are being modified if the flag is set
+        BeingModifiedAgain | waitToShowErrors ->
+          Nothing
+        -- In all other cases we keep the error
+        _ -> 
+          merr
 
-      hushError valid = pure <$> hush (runValidator valid)        
-      showError valid = pure $ runValidator valid
-      err = either pure (const Nothing) =<< res
-
-   in { edit: \onChange -> (modify err <<< edit) (onChange <<< \f -> f <<< (if isNothing err then identity else updateValidation Invalid))
-      , validate: hush =<< res
+   in { edit: \onChange -> (modify 
+          (hushErrorsByFieldState
+          -- We take the error message straight out of the formfield.
+          -- All the magic happns in the edit function    
+          $ getErrorMessage validatedFF) 
+          <<< edit) 
+          -- IMPORTANT
+          -- we ignore the raw state and manually feed in the validated value 
+          (onChange <<< \f v -> f validatedFF)
+        
+      , validate: validValue validatedFF
       }
 
--- | Restricts input entry to only those which pass a validation function.  Other entries are ignored.
-restrictInputOnChange :: ∀ a. Maybe (Validator a a) -> (a -> Effect Unit) -> (a -> Effect Unit)
-restrictInputOnChange validateInput f = case validateInput of 
-  Just validate -> either mempty f <<< validate
-  Nothing       -> f 
-
 -- | A configurable input box makes a `FormBuilder` for strings
+type InputBoxProps props
+  = { readonly :: Boolean
+    , waitToShowErrors :: Boolean
+  -- ^ Rather than show errors on first edit, we wait until the user has entered their first value before showing errors
+    , blurEventOnKey:: Maybe String
+  -- ^ this means that new values are only produced on Blur Events  
+    | props 
+    }
+
+type ValidationProps props = InputBoxProps (newValueOnlyOnFocusChange:: Boolean | props)
+
 inputBox
-  :: forall props
+  :: forall props a
    . Input.InputProps
   -> Maybe (Validator String String)
-  -> FormBuilder
-       { readonly :: Boolean
-       , waitToShowErrors :: Boolean
-      -- ^ Rather than show errors on first edit, we wait until the user has entered their first value before showing errors
-       , newValueOnlyOnFocusChange:: Boolean
-      -- ^ this means that new values are only produced on Blur Events  
-       , blurEventOnKey:: Maybe String
-      -- ^ this means that new values are only produced on Blur Events  
-       | props 
-       }
-       (FormField String)
-       String
-inputBox inputProps restrictInput = formBuilder \{ readonly, newValueOnlyOnFocusChange, blurEventOnKey } ff ->
-  let edit onChange = if readonly
-        then Input.alignToInput $ body_ (formValue ff)
+  -> FormBuilder (InputBoxProps props) (FormField' a String) String
+inputBox inputProps restrictInput = formBuilder \{readonly, blurEventOnKey} (FormField input) ->
+  let 
+      edit onChange = if readonly
+        then Input.alignToInput $ body_ input.inputValue.value
+
         else Input.input inputProps
-              { value = formValue ff
-              , onChange = capture targetValue $ traverse_ $ restrictInputOnChange restrictInput (onChange <<< updateFormField <<< ChangeEvent)
-              , onBlur = notNull $ capture targetValue $ traverse_ (onChange <<< updateFormField <<< BlurEvent)
-              , style = R.css { width: "100%" }
+              { value = input.inputValue.value
+              , onChange = capture targetValue 
+                $ traverse_ 
+                $ restrictInputOnChange restrictInput
+                  (onChange <<< toFormField <<< {inputEvent: ChangeEvent, value: _})
+              
+              , onBlur = notNull $ capture targetValue
+                $ traverse_ 
+                  (onChange <<< toFormField <<< {inputEvent: BlurEvent, value: _})
+             
+              , style = R.css {width: "100%"}
+
               , onKeyUp = notNull $ case blurEventOnKey of 
                   Just keycode -> capture (merge {key, targetValue}) \{key, targetValue} -> 
-                        for_ key \code -> if code == keycode then for_ targetValue (onChange <<< updateFormField <<< BlurEvent) else mempty
+                      for_ key \code -> 
+                        if code == keycode 
+                          then for_ targetValue (onChange <<< toFormField <<< {inputEvent: BlurEvent, value: _}) 
+                          else mempty
+
                   Nothing -> handler_  mempty
               }
   in { edit
-     , validate: 
-        if newValueOnlyOnFocusChange && (fieldState ff `elem` [BeingModifiedFirstTime,BeingModifiedAgain]) 
-      -- ^ Here we restrict the production of new values only on blur-events 
-      -- | TODO: Do we need to add return key presses?
-          then Nothing
-          else Just (formValue ff)
+     , validate: Just input.inputValue.value
     }
 
 -- | A simple text box makes a `FormBuilder` for strings
 textbox
-  :: forall props
+  :: forall props a
    . Maybe (Validator String String) 
    ->  FormBuilder
       { readonly :: Boolean
@@ -338,12 +524,12 @@ textbox
       , newValueOnlyOnFocusChange :: Boolean
       , blurEventOnKey:: Maybe String
       | props 
-      } (FormField String) String
+      } (FormField' a String) String
 textbox = inputBox Input.text_
 
 -- | A simple password box makes a `FormBuilder` for strings
 passwordBox
-  :: forall props
+  :: forall props a
    . Maybe (Validator String String) 
    ->  FormBuilder
       { readonly :: Boolean
@@ -351,60 +537,5 @@ passwordBox
       , newValueOnlyOnFocusChange :: Boolean
       , blurEventOnKey:: Maybe String
       | props 
-      } (FormField String) String
+      } (FormField' a String) String
 passwordBox = inputBox Input.password
-
-
--- | Attach a validation function to a `FormBuilder p u a`, producing a new
--- | `FormBuilder` that takes a `Validated u` as form state and displays a
--- | warning message if its form data triggers a warning, while still allowing
--- | the form to proceed.
--- warn
---   :: forall props unvalidated validated result
---    . CanValidate unvalidated validated
---   => WarningValidator result
---   -> FormBuilder { readonly :: Boolean | props } unvalidated result
---   -> FormBuilder { readonly :: Boolean | props } (Validated validated) result
--- warn warningValidator editor = FormBuilder \props@{ readonly } v ->
---   let { edit, validate } = un FormBuilder editor props (fromValidated v)
-
---       innerColumn_ children =
---         column
---           { style: R.css { maxWidth: "100%", maxHeight: "100%" }
---           , children
---           }
-
---       modify :: Forest -> Forest
---       modify forest =
---           case Array.unsnoc forest of
---             Nothing -> [Child { key: Nothing, child: errLine }]
---             Just { init, last: Child c } ->
---               Array.snoc init (Child c { child = innerColumn_ [c.child, errLine] })
---             Just { init, last: Wrapper c } ->
---               Array.snoc init (Wrapper c { children = modify c.children })
---             Just { init, last: Node n } ->
---               Array.snoc init (Node n { validationError = Warning <$> message })
-
---       errLine :: JSX
---       errLine =
---         guard (not readonly) message # foldMap \s ->
---           text subtext
---             { className = notNull "labeled-field--validation-warning"
---             , children = [ R.text s ]
---             }
-
---       message :: Maybe String
---       message =
---         case v of
---           Fresh _ ->
---             Nothing
---           _ ->
---             warningValidator =<< validate
-
---    in { edit: \onChange -> (modify <<< edit) (onChange <<< \f ->
---           case _ of
---             v'@(Fresh u) -> review modified (f (fromValidated v'))
---             v'@(Modified u) -> review modified (f (fromValidated v'))
---         )
---       , validate
---       }
