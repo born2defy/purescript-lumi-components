@@ -12,6 +12,7 @@ import Data.Enum (toEnum)
 import Data.Eq (class Eq1)
 import Data.Foldable (foldMap, for_, traverse_)
 import Data.Int as Int
+import Data.Lens.Record (prop)
 import Data.Maybe (Maybe(..))
 import Data.Monoid (guard)
 import Data.Newtype (class Newtype, un)
@@ -26,6 +27,7 @@ import Data.Traversable (traverse)
 import Effect (Effect)
 import Heterogeneous.Mapping (class MapRecordWithIndex, class Mapping, ConstMapping, hmap, mapping)
 import Lumi.Components.Column (column)
+import Lumi.Components.Form (focus)
 import Lumi.Components.Form.Internal (Forest, FormBuilder, FormBuilder'(..), Tree(..), formBuilder)
 import Lumi.Components.Input as Input
 import Lumi.Components.LabeledField (ValidationMessage(..))
@@ -35,6 +37,9 @@ import React.Basic.DOM as R
 import React.Basic.DOM.Events (capture, key, targetValue)
 import React.Basic.Events (handler_, merge)
 import Unsafe.Coerce (unsafeCoerce)
+
+-- | Ah blessed convenience
+focusProp = focus <<< prop
 
 -- | A `Validator` takes a possibly invalid form `result` and produces
 -- | a `valid` result, or an error message.
@@ -112,7 +117,7 @@ instance showFormField :: (Show a, Show b) => Show (FormField' b a) where
   show (FormField ff) = fold
     [ "inputValue: "
     , show ff.inputValue
-    , "fieldState: "
+    , ", fieldState: "
     , show ff.fieldState
     , ", validationState: "
     , show ff.validationState
@@ -132,17 +137,11 @@ pure_ x = FormField
   , validValue: Nothing 
   } 
 
-inputValue :: ∀ a b. FormField' b a -> InputValue a
-inputValue = _.inputValue <<< un FormField 
-
 fieldState :: ∀ a b. FormField' b a -> FieldState
 fieldState = _.fieldState <<< un FormField 
 
 formValue :: ∀ a b. FormField' b a -> a
 formValue = _.value <<< un FormField 
-
-validationState :: ∀ a b. FormField' b a -> ValidationState
-validationState = _.validationState <<< un FormField 
 
 validValue :: ∀ a b. FormField' b a -> Maybe b
 validValue = _.validValue <<< un FormField 
@@ -151,13 +150,10 @@ updateFieldState :: ∀ a b. FieldState -> FormField' b a -> FormField' b a
 updateFieldState fs (FormField ff) = FormField ff {fieldState = fs}
 
 getErrorMessage :: ∀ a b. FormField' b a -> Maybe String
-getErrorMessage ff | Invalid err <- validationState ff = Just err
+getErrorMessage (FormField ff) 
+  | Invalid err <- ff.validationState
+  = Just err
 getErrorMessage _ = Nothing
-
-
--- | Update validation status of a formfield which has been modified
-updateValidation :: ∀ a b.  ValidationState -> FormField' b a -> FormField' b a 
-updateValidation v (FormField ff) = FormField $ ff { validationState = v }
 
 -- | A FieldState correctly describes the state of a form field
 data FieldState 
@@ -169,18 +165,19 @@ data FieldState
  -- ^ The value is being modified by the user/a new value is in the process of being constructed by the user.  We may have a warning to show based on their input.
   | BeenModified 
  -- ^ The value has been modified by the user/a new value has been constructed by the user.  We may have a Valid or Invalid new value.
+
 derive instance eqFieldState :: Eq FieldState
 derive instance ordFieldState :: Ord FieldState
 instance showFieldState :: Show FieldState where
   show = case _ of 
-    Initial -> "Initial"
+    Initial                -> "Initial"
     BeingModifiedFirstTime -> "BeingModifiedFirstTime"
-    BeingModifiedAgain -> "BeingModifiedAgain"
-    BeenModified -> "BeenModified"
+    BeingModifiedAgain     -> "BeingModifiedAgain"
+    BeenModified           -> "BeenModified"
 
 isInitial :: FieldState -> Boolean
 isInitial Initial = true
-isInitial _ = false 
+isInitial _       = false 
 
 data ValidationState 
   = Valid
@@ -189,31 +186,42 @@ data ValidationState
  -- ^ The updated value is Invalid 
   | BeingValidated 
  -- ^ The updated value is in an the process of being validated asynchronously
+
 derive instance eqValidationState :: Eq ValidationState
 derive instance ordValidationState :: Ord ValidationState
 instance showValidationState :: Show ValidationState where
   show = case _ of 
-    Valid -> "Valid"
-    Invalid s -> "Invalid: " <> s
+    Valid          -> "Valid"
+    Invalid s      -> "Invalid: " <> s
     BeingValidated -> "BeingValidated"
 
 -- | Internal utility type for modifying the validated state of fields in
 -- | records containing `Validated` values.
 newtype ModifyFormField = ModifyFormField (∀ b. FormField' b ~> FormField' b)
 
-instance modifyFormField :: Mapping ModifyFormField a a => Mapping ModifyFormField (FormField' b a) (FormField' b a) where
-  mapping m@(ModifyFormField f) = map (mapping m) <<< f
-else instance modifyFormFieldRecord :: (RL.RowToList r xs, MapRecordWithIndex xs (ConstMapping ModifyFormField) r r) => Mapping ModifyFormField {| r} {| r} where
-  mapping d = hmap d
-else instance modifyFormFieldArray :: Mapping ModifyFormField a a => Mapping ModifyFormField (Array a) (Array a) where
-  mapping d = map (mapping d)
-else instance modifyFormFieldIdentity :: Mapping ModifyFormField a a where
-  mapping _ = identity
+instance modifyFormField 
+  :: Mapping ModifyFormField a a
+  => Mapping ModifyFormField 
+    (FormField' b a) (FormField' b a) where
+    mapping m@(ModifyFormField f) = map (mapping m) <<< f
+
+else instance modifyFormFieldRecord
+  :: (RL.RowToList r xs, MapRecordWithIndex xs (ConstMapping ModifyFormField) r r)
+  => Mapping ModifyFormField {| r} {| r} where
+    mapping d = hmap d
+
+else instance modifyFormFieldArray
+  :: Mapping ModifyFormField a a 
+  => Mapping ModifyFormField (Array a) (Array a) where
+    mapping d = map (mapping d)
+
+else instance modifyFormFieldIdentity 
+  :: Mapping ModifyFormField a a where
+    mapping _ = identity
 
 -- | Sets all `Validated` fields in a record to `Fresh`, hiding all validation
 -- | messages.
-setInitial
-  :: forall value
+setInitial :: ∀ value
    . Mapping ModifyFormField value value
   => value
   -> value
@@ -221,8 +229,7 @@ setInitial = mapping (ModifyFormField (updateFieldState $ Initial))
 
 -- | Sets all `Validated` fields in a record to `Modified`, showing all
 -- | validation messages.
-setBeenModified
-  :: forall value
+setBeenModified :: ∀ value
    . Mapping ModifyFormField value value
   => value
   -> value
@@ -235,19 +242,18 @@ restrictInputOnChange validateInput f = case validateInput of
   Nothing       -> f 
 
 data InputEvent = ChangeEvent | BlurEvent | Init
+
 derive instance eqeqInputEvent :: Eq InputEvent
 derive instance ordInputEvent :: Ord InputEvent
 instance showInputEvent :: Show InputEvent where
   show = case _ of 
     ChangeEvent -> "ChangeEvent"
-    BlurEvent -> "BlurEvent"
-    Init      -> "Init"
+    BlurEvent   -> "BlurEvent"
+    Init        -> "Init"
 
 type InputValue a = {inputEvent :: InputEvent, value :: a}
 
-type UpdateProps
-  = { newValueOnlyOnFocusChange :: Boolean
-    }
+type UpdateProps = {newValueOnlyOnFocusChange :: Boolean}
 
 deafultUpdateProps :: UpdateProps
 deafultUpdateProps = {newValueOnlyOnFocusChange: true}
@@ -256,139 +262,139 @@ toFormField :: ∀ a b. InputValue a -> FormField' b a -> FormField' b a
 toFormField input (FormField ff) = FormField ff {inputValue = input}
 
 updateFormField :: ∀ a b. Eq a =>  UpdateProps -> Validator a b -> FormField' b a -> FormField' b a
-updateFormField {newValueOnlyOnFocusChange} validate ff@(FormField input) = case input.inputValue.inputEvent, fieldState ff of 
-  -- if the user is changing the initial value, then its being modified the first time
-  ChangeEvent, Initial  
-   -> case validate input.inputValue.value of
-        Left err -> 
-          FormField 
-            { inputValue: input.inputValue
-            , fieldState: BeingModifiedFirstTime
-            , validationState: Invalid err
-            , value: input.inputValue.value
-            -- newValueOnlyOnFocusChange means there is no value when the user is modifiying the input
-            , validValue: Nothing
-            }
-        Right valid -> 
-          FormField 
-            { inputValue: input.inputValue
-            , fieldState: BeingModifiedFirstTime
-            , validationState: Valid
-            , value: input.inputValue.value
-            -- newValueOnlyOnFocusChange means there is no value when the user is modifiying the input
-            , validValue: if newValueOnlyOnFocusChange then Nothing else Just valid 
-            }
+updateFormField {newValueOnlyOnFocusChange} validate ff@(FormField input)
+  = case input.inputValue.inputEvent, fieldState ff of 
+      -- if the user is changing the initial value, then its being modified the first time
+      ChangeEvent, Initial  
+        -> case validate input.inputValue.value of
+              Left err -> 
+                FormField 
+                  { inputValue: input.inputValue
+                  , fieldState: BeingModifiedFirstTime
+                  , validationState: Invalid err
+                  , value: input.inputValue.value
+                  -- newValueOnlyOnFocusChange means there is no value when the user is modifiying the input
+                  , validValue: Nothing
+                  }
+              Right valid -> 
+                FormField 
+                  { inputValue: input.inputValue
+                  , fieldState: BeingModifiedFirstTime
+                  , validationState: Valid
+                  , value: input.inputValue.value
+                  -- newValueOnlyOnFocusChange means there is no value when the user is modifiying the input
+                  , validValue: if newValueOnlyOnFocusChange then Nothing else Just valid 
+                  }
 
-  -- on the first change we make sure the user has done something before we change the state
-  BlurEvent, st | isInitial st && formValue ff == input.inputValue.value -> ff
+      -- on the first change we make sure the user has done something before we change the state
+      BlurEvent, st | isInitial st && formValue ff == input.inputValue.value -> ff
 
-  -- if the user is done, then its been modified and we validate the value if needed
-  BlurEvent, _       
-    -> case validate input.inputValue.value of 
-          Left err -> 
-            FormField 
-              { inputValue: input.inputValue
-              , fieldState: BeenModified 
-              , validationState: Invalid err
-              , value: input.inputValue.value
-              , validValue: Nothing
-              }
-          Right valid -> 
-            FormField 
-              { inputValue: input.inputValue
-              , fieldState: BeenModified
-              , validationState: Valid
-              , value: input.inputValue.value
-              , validValue: Just valid 
-              }
+      -- if the user is done, then its been modified and we validate the value if needed
+      BlurEvent, _       
+        -> case validate input.inputValue.value of 
+              Left err -> 
+                FormField 
+                  { inputValue: input.inputValue
+                  , fieldState: BeenModified 
+                  , validationState: Invalid err
+                  , value: input.inputValue.value
+                  , validValue: Nothing
+                  }
+              Right valid -> 
+                FormField 
+                  { inputValue: input.inputValue
+                  , fieldState: BeenModified
+                  , validationState: Valid
+                  , value: input.inputValue.value
+                  , validValue: Just valid 
+                  }
 
-  -- if we are modifiying a previously modified value, then its being modified again
-  ChangeEvent, BeenModified  
-    -> case validate input.inputValue.value of
-          Left err -> 
-            FormField 
-              { inputValue: input.inputValue
-              , fieldState: BeingModifiedAgain
-              , validationState: Invalid err
-              , value: input.inputValue.value
-              -- newValueOnlyOnFocusChange means there is no value when the user is modifiying the input
-              , validValue: Nothing
-              }
-          Right valid -> 
-            FormField 
-              { inputValue: input.inputValue
-              , fieldState: BeingModifiedAgain
-              , validationState: Valid
-              , value: input.inputValue.value
-              -- newValueOnlyOnFocusChange means there is no value when the user is modifiying the input
-              , validValue: if newValueOnlyOnFocusChange then Nothing else Just valid 
-              }
-  -- if we are changing a beingmodified state, then this just means we are not done yet
- --  This case is actually:  ChangeEvent v, prevState | prevState == BeingModifiedFirstTime || prevState == BeingModifiedAgain
-  ChangeEvent, prevState 
-    -> case validate input.inputValue.value of
-          Left err -> 
-            FormField 
-              { inputValue: input.inputValue
-              , fieldState: prevState
-              , validationState: Invalid err
-              , value: input.inputValue.value
-              -- There is no value when the user is modifiying the input
-              , validValue: Nothing
-              }
-          Right valid -> 
-            FormField 
-              { inputValue: input.inputValue
-              , fieldState: prevState
-              , validationState: Valid
-              , value: input.inputValue.value
-              -- There is no value when the user is modifiying the input
-              , validValue: if newValueOnlyOnFocusChange then Nothing else Just valid 
-              }
+      -- if we are modifiying a previously modified value, then its being modified again
+      ChangeEvent, BeenModified  
+        -> case validate input.inputValue.value of
+              Left err -> 
+                FormField 
+                  { inputValue: input.inputValue
+                  , fieldState: BeingModifiedAgain
+                  , validationState: Invalid err
+                  , value: input.inputValue.value
+                  -- newValueOnlyOnFocusChange means there is no value when the user is modifiying the input
+                  , validValue: Nothing
+                  }
+              Right valid -> 
+                FormField 
+                  { inputValue: input.inputValue
+                  , fieldState: BeingModifiedAgain
+                  , validationState: Valid
+                  , value: input.inputValue.value
+                  -- newValueOnlyOnFocusChange means there is no value when the user is modifiying the input
+                  , validValue: if newValueOnlyOnFocusChange then Nothing else Just valid 
+                  }
+      -- if we are changing a beingmodified state, then this just means we are not done yet
+    --  This case is actually:  ChangeEvent v, prevState | prevState == BeingModifiedFirstTime || prevState == BeingModifiedAgain
+      ChangeEvent, prevState 
+        -> case validate input.inputValue.value of
+              Left err -> 
+                FormField 
+                  { inputValue: input.inputValue
+                  , fieldState: prevState
+                  , validationState: Invalid err
+                  , value: input.inputValue.value
+                  -- There is no value when the user is modifiying the input
+                  , validValue: Nothing
+                  }
+              Right valid -> 
+                FormField 
+                  { inputValue: input.inputValue
+                  , fieldState: prevState
+                  , validationState: Valid
+                  , value: input.inputValue.value
+                  -- There is no value when the user is modifiying the input
+                  , validValue: if newValueOnlyOnFocusChange then Nothing else Just valid 
+                  }
 
-    -- Init is never thrown from an input, so this always means
-    -- we are processing the initial value
-  Init, prevState 
-    -> case validate input.inputValue.value of
-        Left err -> 
-          FormField 
-            { inputValue: input.inputValue
-            , fieldState: prevState
-            , validationState: Invalid err
-            , value: input.inputValue.value
-            -- There is no value when the user is modifiying the input
-            , validValue: Nothing
-            }
-        Right valid -> 
-          FormField 
-            { inputValue: input.inputValue
-            , fieldState: prevState
-            , validationState: Valid
-            , value: input.inputValue.value
-            -- There is no value when the user is modifiying the input
-            , validValue: Just valid 
-            } 
+        -- Init is never thrown from an input, so this always means
+        -- we are processing the initial value
+      Init, prevState 
+        -> case validate input.inputValue.value of
+            Left err -> 
+              FormField 
+                { inputValue: input.inputValue
+                , fieldState: prevState
+                , validationState: Invalid err
+                , value: input.inputValue.value
+                -- There is no value when the user is modifiying the input
+                , validValue: Nothing
+                }
+            Right valid -> 
+              FormField 
+                { inputValue: input.inputValue
+                , fieldState: prevState
+                , validationState: Valid
+                , value: input.inputValue.value
+                -- There is no value when the user is modifiying the input
+                , validValue: Just valid 
+                } 
 
 validated :: ∀ props a b
   .  Eq a  
   => Validator a b
-  -> FormBuilder (InputBoxProps props) (FormField' b a)  a
+  -> FormBuilder (InputBoxProps   props) (FormField' b a) a
   -> FormBuilder (ValidationProps props) (FormField' b a) b
 validated = validatedAs Error
 
 warning :: ∀ props a b
   .  Eq a  
   => Validator a b
-  -> FormBuilder (InputBoxProps props) (FormField' b a)  a
+  -> FormBuilder (InputBoxProps   props) (FormField' b a) a
   -> FormBuilder (ValidationProps props) (FormField' b a) b
 warning = validatedAs Warning
 
-validatedAs
-  :: ∀ props a b
+validatedAs :: ∀ props a b
   .  Eq a  
   => (String -> ValidationMessage)
   -> Validator a b
-  -> FormBuilder (InputBoxProps props) (FormField' b a)  a
+  -> FormBuilder (InputBoxProps   props) (FormField' b a) a
   -> FormBuilder (ValidationProps props) (FormField' b a) b
 validatedAs toError validateValue editor = FormBuilder \props@{readonly, waitToShowErrors, newValueOnlyOnFocusChange} ff ->
   let 
@@ -428,12 +434,12 @@ validatedAs toError validateValue editor = FormBuilder \props@{readonly, waitToS
               Error e ->
                 text subtext
                   { className = notNull "labeled-field--validation-error"
-                  , children = [ R.text e ]
+                  , children = [R.text e]
                   }
               Warning w ->
                 text subtext
                   { className = notNull "labeled-field--validation-warning"
-                  , children = [ R.text w ]
+                  , children = [R.text w]
                   }
 
       -- The validation can produce either a valid result, an error message, or
@@ -455,14 +461,14 @@ validatedAs toError validateValue editor = FormBuilder \props@{readonly, waitToS
 
    in { edit: \onChange -> (modify 
           (hushErrorsByFieldState
-          -- We take the error message straight out of the formfield.
-          -- All the magic happns in the edit function    
+          -- We take the error message straight out of the formfield.  
           $ getErrorMessage validatedFF) 
           <<< edit) 
           -- IMPORTANT
           -- we ignore the raw state and manually feed in the validated value 
-          (onChange <<< \f v -> f validatedFF)
-        
+          (onChange <<< \f _ -> f validatedFF)
+
+        -- We take the valeu straight from the validated formfield
       , validate: validValue validatedFF
       }
 
@@ -482,7 +488,7 @@ inputBox
   :: forall props a
    . Input.InputProps
   -> Maybe (Validator String String)
-  -> FormBuilder (InputBoxProps props) (FormField' a String) String
+  -> FormBuilder (InputBoxProps props) (FormField a) String
 inputBox inputProps restrictInput = formBuilder \{readonly, blurEventOnKey} (FormField input) ->
   let 
       edit onChange = if readonly
@@ -515,27 +521,9 @@ inputBox inputProps restrictInput = formBuilder \{readonly, blurEventOnKey} (For
     }
 
 -- | A simple text box makes a `FormBuilder` for strings
-textbox
-  :: forall props a
-   . Maybe (Validator String String) 
-   ->  FormBuilder
-      { readonly :: Boolean
-      , waitToShowErrors :: Boolean
-      , newValueOnlyOnFocusChange :: Boolean
-      , blurEventOnKey:: Maybe String
-      | props 
-      } (FormField' a String) String
+textbox :: forall props a. Maybe (Validator String String) -> FormBuilder (InputBoxProps props) (FormField a) String
 textbox = inputBox Input.text_
 
 -- | A simple password box makes a `FormBuilder` for strings
-passwordBox
-  :: forall props a
-   . Maybe (Validator String String) 
-   ->  FormBuilder
-      { readonly :: Boolean
-      , waitToShowErrors :: Boolean
-      , newValueOnlyOnFocusChange :: Boolean
-      , blurEventOnKey:: Maybe String
-      | props 
-      } (FormField' a String) String
+passwordBox :: forall props a. Maybe (Validator String String) -> FormBuilder (InputBoxProps props) (FormField a) String
 passwordBox = inputBox Input.password
