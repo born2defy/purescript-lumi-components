@@ -105,7 +105,7 @@ newtype FormField' b a = FormField
   , fieldState :: FieldState
   , validationState :: ValidationState
   , value :: a
-  , validValue :: Maybe b 
+  , validatedValue :: Maybe b 
   }  
 derive instance ntFormField :: Newtype (FormField' b a) _
 derive instance eqeqFormField :: (Eq b, Eq a) => Eq (FormField' b a)
@@ -123,8 +123,8 @@ instance showFormField :: (Show a, Show b) => Show (FormField' b a) where
     , show ff.validationState
     , ", value: "
     , show ff.value
-    , ", validValue: "
-    , show ff.validValue
+    , ", validatedValue: "
+    , show ff.validatedValue
     ]
 
 type FormField a = FormField' a String  
@@ -134,7 +134,7 @@ pure_ x = FormField
   , fieldState: Initial
   , validationState: Valid
   , value: x
-  , validValue: Nothing 
+  , validatedValue: Nothing 
   } 
 
 fieldState :: ∀ a b. FormField' b a -> FieldState
@@ -143,8 +143,8 @@ fieldState = _.fieldState <<< un FormField
 formValue :: ∀ a b. FormField' b a -> a
 formValue = _.value <<< un FormField 
 
-validValue :: ∀ a b. FormField' b a -> Maybe b
-validValue = _.validValue <<< un FormField 
+validatedValue :: ∀ a b. FormField' b a -> Maybe b
+validatedValue = _.validatedValue <<< un FormField 
 
 updateFieldState :: ∀ a b. FieldState -> FormField' b a -> FormField' b a 
 updateFieldState fs (FormField ff) = FormField ff {fieldState = fs}
@@ -258,9 +258,6 @@ type UpdateProps = {newValueOnlyOnFocusChange :: Boolean}
 deafultUpdateProps :: UpdateProps
 deafultUpdateProps = {newValueOnlyOnFocusChange: true}
 
-toFormField :: ∀ a b. InputValue a -> FormField' b a -> FormField' b a
-toFormField input (FormField ff) = FormField ff {inputValue = input}
-
 updateFormField :: ∀ a b. Eq a =>  UpdateProps -> Validator a b -> FormField' b a -> FormField' b a
 updateFormField {newValueOnlyOnFocusChange} validate ff@(FormField input)
   = case input.inputValue.inputEvent, fieldState ff of 
@@ -274,7 +271,7 @@ updateFormField {newValueOnlyOnFocusChange} validate ff@(FormField input)
                   , validationState: Invalid err
                   , value: input.inputValue.value
                   -- newValueOnlyOnFocusChange means there is no value when the user is modifiying the input
-                  , validValue: Nothing
+                  , validatedValue: Nothing
                   }
               Right valid -> 
                 FormField 
@@ -283,7 +280,7 @@ updateFormField {newValueOnlyOnFocusChange} validate ff@(FormField input)
                   , validationState: Valid
                   , value: input.inputValue.value
                   -- newValueOnlyOnFocusChange means there is no value when the user is modifiying the input
-                  , validValue: if newValueOnlyOnFocusChange then Nothing else Just valid 
+                  , validatedValue: if newValueOnlyOnFocusChange then Nothing else Just valid 
                   }
 
       -- on the first change we make sure the user has done something before we change the state
@@ -298,7 +295,7 @@ updateFormField {newValueOnlyOnFocusChange} validate ff@(FormField input)
                   , fieldState: BeenModified 
                   , validationState: Invalid err
                   , value: input.inputValue.value
-                  , validValue: Nothing
+                  , validatedValue: Nothing
                   }
               Right valid -> 
                 FormField 
@@ -306,7 +303,7 @@ updateFormField {newValueOnlyOnFocusChange} validate ff@(FormField input)
                   , fieldState: BeenModified
                   , validationState: Valid
                   , value: input.inputValue.value
-                  , validValue: Just valid 
+                  , validatedValue: Just valid 
                   }
 
       -- if we are modifiying a previously modified value, then its being modified again
@@ -319,7 +316,7 @@ updateFormField {newValueOnlyOnFocusChange} validate ff@(FormField input)
                   , validationState: Invalid err
                   , value: input.inputValue.value
                   -- newValueOnlyOnFocusChange means there is no value when the user is modifiying the input
-                  , validValue: Nothing
+                  , validatedValue: Nothing
                   }
               Right valid -> 
                 FormField 
@@ -328,7 +325,7 @@ updateFormField {newValueOnlyOnFocusChange} validate ff@(FormField input)
                   , validationState: Valid
                   , value: input.inputValue.value
                   -- newValueOnlyOnFocusChange means there is no value when the user is modifiying the input
-                  , validValue: if newValueOnlyOnFocusChange then Nothing else Just valid 
+                  , validatedValue: if newValueOnlyOnFocusChange then Nothing else Just valid 
                   }
       -- if we are changing a beingmodified state, then this just means we are not done yet
     --  This case is actually:  ChangeEvent v, prevState | prevState == BeingModifiedFirstTime || prevState == BeingModifiedAgain
@@ -341,7 +338,7 @@ updateFormField {newValueOnlyOnFocusChange} validate ff@(FormField input)
                   , validationState: Invalid err
                   , value: input.inputValue.value
                   -- There is no value when the user is modifiying the input
-                  , validValue: Nothing
+                  , validatedValue: Nothing
                   }
               Right valid -> 
                 FormField 
@@ -350,7 +347,7 @@ updateFormField {newValueOnlyOnFocusChange} validate ff@(FormField input)
                   , validationState: Valid
                   , value: input.inputValue.value
                   -- There is no value when the user is modifiying the input
-                  , validValue: if newValueOnlyOnFocusChange then Nothing else Just valid 
+                  , validatedValue: if newValueOnlyOnFocusChange then Nothing else Just valid 
                   }
 
         -- Init is never thrown from an input, so this always means
@@ -364,7 +361,7 @@ updateFormField {newValueOnlyOnFocusChange} validate ff@(FormField input)
                 , validationState: Invalid err
                 , value: input.inputValue.value
                 -- There is no value when the user is modifiying the input
-                , validValue: Nothing
+                , validatedValue: Nothing
                 }
             Right valid -> 
               FormField 
@@ -373,7 +370,7 @@ updateFormField {newValueOnlyOnFocusChange} validate ff@(FormField input)
                 , validationState: Valid
                 , value: input.inputValue.value
                 -- There is no value when the user is modifiying the input
-                , validValue: Just valid 
+                , validatedValue: Just valid 
                 } 
 
 validated :: ∀ props a b
@@ -410,8 +407,7 @@ validatedAs toError validateValue editor = FormBuilder \props@{readonly, waitToS
           { style: R.css {maxWidth: "100%", maxHeight: "100%"}
           , children
           }
-      -- Its ugly, but we can use an arbitrary InputEvent here as the inputbox
-      -- discrads it anyway.  Still less ugly then tracking the value for no reason.
+
       {edit, validate} = un FormBuilder editor (contractProps props) ff
 
       modify :: Maybe String -> Forest -> Forest
@@ -442,8 +438,6 @@ validatedAs toError validateValue editor = FormBuilder \props@{readonly, waitToS
                   , children = [R.text w]
                   }
 
-      -- The validation can produce either a valid result, an error message, or
-      -- none in the case where the form is Fresh.
       hushErrorsByFieldState :: Maybe String -> Maybe String 
       hushErrorsByFieldState merr = case fieldState validatedFF of
       -- We don't show errors on initial values by default
@@ -469,7 +463,7 @@ validatedAs toError validateValue editor = FormBuilder \props@{readonly, waitToS
           (onChange <<< \f _ -> f validatedFF)
 
         -- We take the valeu straight from the validated formfield
-      , validate: validValue validatedFF
+      , validate: validatedValue validatedFF
       }
 
 -- | A configurable input box makes a `FormBuilder` for strings
@@ -499,11 +493,15 @@ inputBox inputProps restrictInput = formBuilder \{readonly, blurEventOnKey} (For
               , onChange = capture targetValue 
                 $ traverse_ 
                 $ restrictInputOnChange restrictInput
-                  (onChange <<< toFormField <<< {inputEvent: ChangeEvent, value: _})
+                  (onChange
+                  <<< (\inp (FormField ff) -> FormField ff {inputValue = inp})
+                  <<< {inputEvent: ChangeEvent, value: _})
               
               , onBlur = notNull $ capture targetValue
                 $ traverse_ 
-                  (onChange <<< toFormField <<< {inputEvent: BlurEvent, value: _})
+                  (onChange 
+                  <<< (\inp (FormField ff) -> FormField ff {inputValue = inp})
+                  <<< {inputEvent: BlurEvent, value: _})
              
               , style = R.css {width: "100%"}
 
@@ -511,8 +509,12 @@ inputBox inputProps restrictInput = formBuilder \{readonly, blurEventOnKey} (For
                   Just keycode -> capture (merge {key, targetValue}) \{key, targetValue} -> 
                       for_ key \code -> 
                         if code == keycode 
-                          then for_ targetValue (onChange <<< toFormField <<< {inputEvent: BlurEvent, value: _}) 
-                          else mempty
+                          then for_ targetValue 
+                            (onChange 
+                            <<< (\inp (FormField ff) -> FormField ff {inputValue = inp})
+                            <<< {inputEvent: BlurEvent, value: _}) 
+ 
+                         else mempty
 
                   Nothing -> handler_  mempty
               }
